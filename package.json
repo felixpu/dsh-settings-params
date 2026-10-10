@@ -1,0 +1,53 @@
+{
+  "name": "dsh-settings-params",
+  "version": "0.1.0",
+  "description": "集中管理注入宿主的环境变量，并支持按白名单热重载那些启动时只读一次环境变量的插件（如 dsh-sql），免重启即可读取新值。",
+  "icon": "icon.svg",
+  "type": "module",
+  "main": "lib/index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/felixpu/dsh-settings-params.git"
+  },
+  "homepage": "https://github.com/felixpu/dsh-settings-params#readme",
+  "bugs": {
+    "url": "https://github.com/felixpu/dsh-settings-params/issues"
+  },
+  "author": "felixpu",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./client/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "client",
+    "cordis.patch.yml",
+    "icon.svg"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-slots"
+      ],
+      "platform": "web"
+    }
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "plugin",
+    "settings",
+    "environment"
+  ],
+  "license": "MIT"
+}
