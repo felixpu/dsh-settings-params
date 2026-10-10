@@ -14,7 +14,7 @@
 ## 安装
 
 ```sh
-dsh plugin --profile web add dsh-settings-params
+dsh plugin --profile web add github:felixpu/dsh-settings-params
 ```
 
 安装后重启宿主进程。
