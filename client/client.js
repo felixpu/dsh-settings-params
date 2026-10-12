@@ -53,16 +53,29 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 	 * 白名单与变量存在同一个 params.yml 里，卸载重装插件后依然保留。
 	 *
 	 * 样式逐条取自原生 Primitives 编译产物，颜色全部走 --dsw-* 变量，跟随主题亮暗。
+	 *
+	 * ## 界面语言
+	 *
+	 * 界面文案支持**中文与英文**，跟随平台语言设置（设置 → 通用 → 语言），切换后
+	 * 已渲染的插槽实时跟随。接线方式与官方插件一致：`ctx.locale.register(NS, {zh, en})`
+	 * + 每个槽注册里声明 `locale: NS`（渲染器据此把 `t` 注入组件 props）。
+	 * 宿主回的是**机器可读 code**（+ 占位参数），文案全在本文件的字典里。
 	 */
 
 	/** 插件名（cordis 条目名，同时是模块加载器 bundle id）。 */
 	var name = "dsh-settings-params";
 
-	/** 声明的注入：插槽注册。 */
-	var inject = ["slots"];
+	/**
+	 * 声明的注入：插槽注册 + 平台 locale 服务。
+	 *
+	 * `locale` 是**必须**的：槽注册里声明的 `locale: NS` 会让渲染器去取
+	 * `host.locale`（`standardKit` 的 `kit["t"] = localeSeat(face, entry.locale)`），
+	 * 取不到会**抛 SlotAssemblyError**，这一行插件连同页面一起失效。
+	 */
+	var inject = ["slots", "locale"];
 
 	/**
-	 * 「允许模型读取」的风险提示文案。
+	 * 「允许模型读取」的风险提示文案（`expose.riskTip` / `expose.riskShort`）。
 	 *
 	 * 开启授权后，模型（含子代理）可通过 env_param_get 工具读到变量**明文**。
 	 * 这里必须把三层代价**同等显著**地讲清楚，缺一不可：
@@ -71,36 +84,311 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 	 *   ③ 因此**高敏感密钥不建议开启**。
 	 *
 	 * 措辞红线：不得使用「安全读取」「加密」「仅本机可见」之类会让用户低估风险的
-	 * 说法 —— 弱化告知等于让用户在不知情下暴露密钥。
-	 */
-	var EXPOSE_RISK_TIP = "开启后，模型与子代理均可通过 env_param_get 工具读取该变量的明文。"
-		+ "请注意三点："
-		+ "①明文会进入模型上下文，即会被发送给上游模型服务，可能被其记录；"
-		+ "②明文会留在本次会话的对话记录与日志中，可被回看和导出；"
-		+ "③因此高敏感密钥不建议开启。"
-		+ "仅在确需让模型直接使用该值时再打开。";
-
-	/**
-	 * 行内极短风险标记：不 hover 也要能看出「这会外流」，不能把代价完全藏进气泡。
+	 * 说法 —— 弱化告知等于让用户在不知情下暴露密钥。中英文案见上方字典。
 	 *
-	 * 与 EXPOSE_RISK_TIP 的分工：这条只负责「让人意识到有代价」，详情（三点代价）
-	 * 由 Tooltip 承载。之所以保留一个不依赖 hover 的可见标记，是因为「勾选即放行」
-	 * 的动作风险高，若只有 hover 才告知，等于默认用户不会看 —— 那属于弱化告知。
-	 * 长度刻意压到与「允许模型读取」同一量级，避免早期 190px 常驻长文挤爆行布局。
+	 * 行内那条极短标记（`expose.riskShort`）与完整提示的分工：短标记只负责「让人
+	 * 意识到有代价」（不 hover 也看得见），三点详情由 Tooltip 承载。之所以保留一个不
+	 * 依赖 hover 的可见标记，是因为「勾选即放行」的动作风险高，若只有 hover 才告知，
+	 * 等于默认用户不会看 —— 那属于弱化告知。
 	 */
-	var EXPOSE_RISK_SHORT = "会进入模型上下文与会话记录";
 
 	/** 路由前缀，与宿主半身一致。 */
 	var ROUTE_BASE = "/dsh-settings-params";
 
-	/** fiber 状态 → 界面上给用户看的中文说明。 */
-	var STATE_LABEL = {
-		unloaded: "未加载",
-		pending: "等待依赖",
-		busy: "加载中",
-		failed: "加载失败",
-		disposed: "已卸载"
+	// ---- 文案字典（官方 locale 服务；中英双语必须成对）----
+	//
+	// 走平台官方 locale 服务（`ctx.locale.register(ns, {zh, en})`），与官方插件同一套
+	// 机制（参考 dsh-client-ui-settings-general 与 dsh-client-ui-schedule）。渲染器按
+	// 注册项声明的 `locale` 命名空间把 `t` 自动合成进组件 props，语言切换时已渲染的
+	// 插槽会实时跟随（localeSeat 按 revision 换新的函数引用）。
+	//
+	// ⚠️ 命名空间用包名，绝不复用官方或他人命名空间 —— 同名会撞（同一 (ns, locale)
+	//    重复注册会抛错）。
+	//
+	// ⚠️ 以下键**刻意不定义**，直接复用平台 `common` 字典（本命名空间未命中后会自动
+	//    回落到 common）：cancel / loading / save / unknown。自己再写一遍会与平台
+	//    文案不一致。
+	//
+	// ⚠️ 每条都是**一个完整句子**，变量用 `{name}` 占位（平台 Translate 支持
+	//    `t(key, params)`，运行时按 /\{(\w+)\}/g 替换）。不要拆成片段再拼接：
+	//    英文语序与中文不同（"Deleted 3 sessions" vs 「已删除 3 个会话」），拼接式
+	//    无法重排，片段本身也成了需要翻译的字符串。
+	//
+	// ⚠️ `code.*` 是**宿主返回的机器可读码**（错误码 + 结果码）的译文：宿主只回 code
+	//    与参数，不写自然语言 —— 文案归客户端所有，宿主不该知道界面语言。
+	//    `codeText()` 负责翻译；**字典里没有的 code 原样显示**（那是宿主抛出的异常
+	//    文本，不属于字典管辖，绝不能显示成 "code.xxx"）。
+	//
+	// ⚠️ 中文键集是事实来源；英文键集必须与之**逐键一致**（运行时 register 不检查，
+	//    漏键不报错、只会在英文界面显示 key 名，因此 apply 里加了自查告警）。
+	var NS = "dsh-settings-params";
+
+	/** 简体中文文案（键集的事实来源）。 */
+	var zh = {
+		"code.bad-json": "响应不是合法 JSON（HTTP {status}）。",
+		"code.request-failed": "请求失败：{msg}",
+		"code.not-same-origin": "本接口仅接受同源 POST 请求。",
+		"code.name-empty": "变量名不能为空。",
+		"code.name-too-long": "变量名过长（上限 {max} 字符）。",
+		"code.name-invalid": "变量名非法：只允许字母、数字、下划线，且不能以数字开头。",
+		"code.name-unsafe": "变量名「{key}」会改变宿主进程自身的行为（可执行文件/模块/动态库的查找路径等），从本页设置风险过高，已拒绝。如确实需要，请直接编辑 {file}（那里的写入不受本页限制）。",
+		"code.value-not-string": "变量值必须是字符串。",
+		"code.value-too-long": "变量值过长（上限 {max} 字符）。",
+		"code.value-has-newline": "变量值不能包含换行。",
+		"code.note-not-string": "备注必须是字符串。",
+		"code.note-too-long": "备注过长（上限 {max} 字符）。",
+		"code.note-has-newline": "备注不能包含换行。",
+		"code.loader-unavailable": "插件加载器不可用。",
+		"code.target-not-found": "未找到该插件条目。",
+		"code.self": "不能重载参数插件自身。",
+		"code.not-loaded": "该插件未处于已加载状态。",
+		"code.not-active": "该插件当前不是运行状态，无法重载。",
+		"code.not-restartable": "该插件不支持热重载。",
+		"code.set-saved": "已写入文件并注入当前进程；对启动时只读一次环境变量的插件（如 dsh-sql），请在下方勾选后热重载，或重启服务。",
+		"code.unset-removed": "已从文件移除并清理当前进程变量；释放相关资源需热重载或重启。",
+		"code.unset-not-in-file": "文件中原无此变量，已清理当前进程中的同名变量。",
+		"code.reload-with-plugins": "已按文件内容重新注入当前进程，并按白名单重载插件。",
+		"code.reload-env-only": "已按文件内容重新注入当前进程（未重载插件）。",
+		"code.apply-cleared": "白名单已清空，仅注入当前进程。",
+		"code.apply-reloaded": "已注入当前进程并重载 {n} 个插件。",
+		"code.apply-partial": "已重载 {n} 个插件，{fail} 个未能重载（已从白名单剔除）。",
+		"code.expose-all-revoked": "已关闭全部「允许模型读取」授权，模型不再能读取任何变量的明文。",
+		"code.expose-updated": "已更新授权：模型与子代理可通过 env_param_get 读取这 {n} 个变量的明文（明文会进入模型上下文与本次会话的对话记录）。",
+		"state.unloaded": "未加载",
+		"state.pending": "等待依赖",
+		"state.active": "运行中",
+		"state.busy": "加载中",
+		"state.failed": "加载失败",
+		"state.disposed": "已卸载",
+		"expose.riskTip": "开启后，模型与子代理均可通过 env_param_get 工具读取该变量的明文。请注意三点：①明文会进入模型上下文，即会被发送给上游模型服务，可能被其记录；②明文会留在本次会话的对话记录与日志中，可被回看和导出；③因此高敏感密钥不建议开启。仅在确需让模型直接使用该值时再打开。",
+		"expose.riskShort": "会进入模型上下文与会话记录",
+		"expose.label": "允许模型读取",
+		"page.lead": "管理注入 DSH 宿主的环境变量，保存后写入当前进程并持久化。",
+		"page.legacyFile": "旧文件（已保留为 .bak）：{file}",
+		"page.migrated": "已把旧的 params.env 迁移为 params.yml，旧文件保留为 .bak 备份。",
+		"page.loadFailed": "读取失败。",
+		"page.actionFailed": "操作失败。",
+		"page.saved": "已保存。",
+		"var.title": "已配置变量",
+		"var.empty": "还没有配置任何环境变量。",
+		"var.note": "值为掩码显示；「进程内」表示仅存在于当前进程，点「修改」可纳入文件。",
+		"var.inProcess": "进程内",
+		"var.masked": "••••••",
+		"var.maskedLength": "•••••• ({n} 字符)",
+		"var.emptyValue": "（空值）",
+		"var.newValue": "新值",
+		"var.notePlaceholder": "备注",
+		"var.edit": "修改",
+		"var.editValueNote": "改值/备注",
+		"var.delete": "删除",
+		"var.deleteConfirm": "确定删除环境变量 {key} 吗？\n依赖它的插件在重启后将不再收到该变量。",
+		"var.saved": "已保存变量 {key}。",
+		"var.updated": "已更新变量 {key}。",
+		"var.deleted": "已删除变量 {key}。",
+		"var.exposeOn": "已允许模型读取 {key} 的明文（会进入模型上下文与会话记录）。",
+		"var.exposeOff": "已禁止模型读取 {key}，该授权立即失效。",
+		"add.title": "新增 / 更新变量",
+		"add.keyPlaceholder": "变量名，如 DINGTALK_REGISTRATION_SOURCE",
+		"add.valuePlaceholder": "值（敏感内容不会回显）",
+		"add.notePlaceholder": "备注（可选），如：生产库密码",
+		"add.keyRequired": "请填写变量名。",
+		"wl.title": "热重载白名单",
+		"wl.note": "选中那些只在启动时读一次环境变量的插件（如 dsh-sql），点下方按钮即可让其重读新值，无需重启服务。",
+		"wl.none": "未选择任何插件。",
+		"wl.remove": "移出白名单",
+		"wl.searchPlaceholder": "搜索插件名，如 dsh-sql",
+		"wl.collapse": "收起列表",
+		"wl.groupUser": "用户安装的插件（{n}）",
+		"wl.groupSystem": "宿主内置（{n}）",
+		"wl.showSystem": "▸ 显示 {n} 个宿主内置插件",
+		"wl.noMatch": "没有匹配的插件。",
+		"wl.more": "结果较多，请继续输入以缩小范围。",
+		"wl.resultsTitle": "上次热重载结果：",
+		"wl.resultOk": "✓ {name} 已重载",
+		"wl.resultOkDup": "✓ {name} 已重载（同名条目 {count} 个，实际重载运行中的 {id}）",
+		"wl.resultErr": "✗ {name}：{error}",
+		"wl.optAdd": "点击加入白名单",
+		"wl.optSelected": "已选",
+		"wl.optRestartable": "可重载",
+		"wl.optNotRestartable": "不可重载",
+		"wl.dupTag": "同名 {n}",
+		"wl.optDupTip": "；该名字在 loader 里有 {n} 个条目，实际重载运行中的那个",
+		"wl.applyConfirm": "将热重载以下插件：\n\n  {names}\n\n这些插件会被卸载并立即重新加载，其连接/状态会重建。继续吗？",
+		"wl.applyWith": "保存并热重载 {n} 个插件",
+		"wl.applyOnly": "保存白名单（不重载）",
+		"wl.skipped": "未通过：{list}",
+		"wl.skippedItem": "{name}（{reason}）",
+		"wl.listSep": "；",
+		"global.title": "全局操作",
+		"global.hint": "作用于整份参数文件与宿主进程，不只是上方某一项设置。",
+		"global.reload": "重新加载文件",
+		"global.refresh": "刷新",
+		"global.restart": "重启服务",
+		"global.restartConfirm": "重启 DSH 服务？\n\n会中断当前所有进行中的会话，页面将自动重连。\n这是兜底手段：若只需让 dsh-sql 等插件读到新值，请改用上方的「热重载白名单」，那不会中断会话。",
+		"global.restarting": "正在重启…",
+		"global.restartFailed": "重启请求失败：{msg}",
+		"global.restartTimeout": "等待服务恢复超时，请手动刷新页面。",
+		"global.restartRecovered": "服务已恢复，正在刷新…",
+		"detail.badge": "已放行 {n} 个环境变量",
+		"detail.badgeLoading": "参数放行",
+		"detail.badgeTip": "本插件已在参数放行名单中，当前共放行 {n} 个环境变量。",
+		"detail.badgeTipEmpty": "本插件已在参数放行名单中，但尚未配置任何环境变量（可在 dsh-settings-params 的插件页里添加）。",
+		"detail.title": "参数放行",
+		"detail.reading": "读取中…",
+		"detail.allowedCount": "已放行 {n} 个",
+		"detail.hasValue": "已填值",
+		"detail.noValue": "未填值",
+		"detail.desc": "参数在 dsh-settings-params 的插件页里定义。",
+		"detail.refresh": "刷新状态",
+		"detail.stateFailed": "读取参数状态失败。",
 	};
+
+	/** English copy, key-for-key identical to `zh`. */
+	var en = {
+		"code.bad-json": "The response was not valid JSON (HTTP {status}).",
+		"code.request-failed": "Request failed: {msg}",
+		"code.not-same-origin": "This endpoint only accepts same-origin POST requests.",
+		"code.name-empty": "The variable name must not be empty.",
+		"code.name-too-long": "The variable name is too long (limit {max} characters).",
+		"code.name-invalid": "Invalid variable name: only letters, digits and underscores are allowed, and it must not start with a digit.",
+		"code.name-unsafe": "The name \"{key}\" would change the Host process itself (executable, module and dynamic library lookup paths, and so on), which is too risky to set from this page, so it was rejected. If you really need it, edit {file} directly (writes there are not restricted by this page).",
+		"code.value-not-string": "The variable value must be a string.",
+		"code.value-too-long": "The variable value is too long (limit {max} characters).",
+		"code.value-has-newline": "The variable value must not contain a line break.",
+		"code.note-not-string": "The note must be a string.",
+		"code.note-too-long": "The note is too long (limit {max} characters).",
+		"code.note-has-newline": "The note must not contain a line break.",
+		"code.loader-unavailable": "The plugin loader is unavailable.",
+		"code.target-not-found": "That plugin entry was not found.",
+		"code.self": "The parameter plugin cannot reload itself.",
+		"code.not-loaded": "That plugin is not loaded.",
+		"code.not-active": "That plugin is not running, so it cannot be reloaded.",
+		"code.not-restartable": "That plugin does not support hot reload.",
+		"code.set-saved": "Written to the file and injected into the current process. For plugins that read their environment only once at startup (such as dsh-sql), tick them below to hot-reload, or restart the Host.",
+		"code.unset-removed": "Removed from the file and cleaned up in the current process; releasing related resources requires a hot reload or a restart.",
+		"code.unset-not-in-file": "The file did not define this variable; the same-named variable in the current process was cleaned up.",
+		"code.reload-with-plugins": "Re-injected the file contents into the current process and reloaded the allow-listed plugins.",
+		"code.reload-env-only": "Re-injected the file contents into the current process (no plugins reloaded).",
+		"code.apply-cleared": "The allowlist is now empty; values were only injected into the current process.",
+		"code.apply-reloaded": "Injected into the current process and reloaded {n} plugin(s).",
+		"code.apply-partial": "Reloaded {n} plugin(s); {fail} could not be reloaded and were removed from the allowlist.",
+		"code.expose-all-revoked": "All model-access grants are now switched off; the model can no longer read any variable in plaintext.",
+		"code.expose-updated": "Grants updated: the model and subagents can read these {n} variables in plaintext through env_param_get (the plaintext enters the model context and the transcript of this session).",
+		"state.unloaded": "Not loaded",
+		"state.pending": "Waiting for dependencies",
+		"state.active": "Running",
+		"state.busy": "Loading",
+		"state.failed": "Failed to load",
+		"state.disposed": "Unloaded",
+		"expose.riskTip": "Once enabled, the model and subagents can read this variable in plaintext through the env_param_get tool. Three consequences deserve equal weight: (1) the plaintext enters the model context, meaning it is sent to the upstream model service and may be recorded there; (2) the plaintext stays in the transcript and logs of this session, where it can be reviewed and exported; (3) therefore highly sensitive secrets should not be enabled. Turn this on only when the model genuinely needs to use the value directly.",
+		"expose.riskShort": "Enters the model context and session transcript",
+		"expose.label": "Allow model access",
+		"page.lead": "Manage the environment variables injected into the DSH Host. Saving writes them into the current process and persists them.",
+		"page.legacyFile": "Old file (kept as .bak): {file}",
+		"page.migrated": "Migrated the old params.env to params.yml; the old file is kept as a .bak backup.",
+		"page.loadFailed": "Failed to load.",
+		"page.actionFailed": "The operation failed.",
+		"page.saved": "Saved.",
+		"var.title": "Configured variables",
+		"var.empty": "No environment variables configured yet.",
+		"var.note": "Values are shown masked. \"In process\" means the variable exists only in the current process; click Edit to add it to the file.",
+		"var.inProcess": "In process",
+		"var.masked": "••••••",
+		"var.maskedLength": "•••••• ({n} chars)",
+		"var.emptyValue": "(empty)",
+		"var.newValue": "New value",
+		"var.notePlaceholder": "Note",
+		"var.edit": "Edit",
+		"var.editValueNote": "Edit value/note",
+		"var.delete": "Delete",
+		"var.deleteConfirm": "Delete environment variable {key}?\nPlugins that depend on it will no longer receive it after a restart.",
+		"var.saved": "Saved variable {key}.",
+		"var.updated": "Updated variable {key}.",
+		"var.deleted": "Deleted variable {key}.",
+		"var.exposeOn": "Model access to {key} in plaintext is now allowed (it enters the model context and session transcript).",
+		"var.exposeOff": "Model access to {key} is now disabled; the grant stops applying immediately.",
+		"add.title": "Add / update a variable",
+		"add.keyPlaceholder": "Variable name, e.g. DINGTALK_REGISTRATION_SOURCE",
+		"add.valuePlaceholder": "Value (sensitive content is never echoed)",
+		"add.notePlaceholder": "Note (optional), e.g. production database password",
+		"add.keyRequired": "Enter a variable name.",
+		"wl.title": "Hot-reload allowlist",
+		"wl.note": "Select the plugins that read their environment variables only once at startup (such as dsh-sql); the button below makes them re-read the new values without restarting the Host.",
+		"wl.none": "No plugins selected.",
+		"wl.remove": "Remove from allowlist",
+		"wl.searchPlaceholder": "Search plugin names, e.g. dsh-sql",
+		"wl.collapse": "Collapse the list",
+		"wl.groupUser": "User-installed plugins ({n})",
+		"wl.groupSystem": "Host built-ins ({n})",
+		"wl.showSystem": "▸ Show {n} host built-in plugins",
+		"wl.noMatch": "No matching plugins.",
+		"wl.more": "Many results; keep typing to narrow them down.",
+		"wl.resultsTitle": "Last hot-reload results:",
+		"wl.resultOk": "✓ {name} reloaded",
+		"wl.resultOkDup": "✓ {name} reloaded ({count} entries share this name; the running one {id} was reloaded)",
+		"wl.resultErr": "✗ {name}: {error}",
+		"wl.optAdd": "Click to add to the allowlist",
+		"wl.optSelected": "Selected",
+		"wl.optRestartable": "Restartable",
+		"wl.optNotRestartable": "Not restartable",
+		"wl.dupTag": "{n} same-name",
+		"wl.optDupTip": "; the loader has {n} entries under this name and the running one is reloaded",
+		"wl.applyConfirm": "These plugins will be hot-reloaded:\n\n  {names}\n\nThey will be unloaded and immediately reloaded, rebuilding their connections and state. Continue?",
+		"wl.applyWith": "Save and hot-reload {n} plugin(s)",
+		"wl.applyOnly": "Save the allowlist (without reloading)",
+		"wl.skipped": "Rejected: {list}",
+		"wl.skippedItem": "{name} ({reason})",
+		"wl.listSep": "; ",
+		"global.title": "Global actions",
+		"global.hint": "These apply to the whole parameters file and the Host process, not just one setting above.",
+		"global.reload": "Reload file",
+		"global.refresh": "Refresh",
+		"global.restart": "Restart Host",
+		"global.restartConfirm": "Restart the DSH Host?\n\nAll running sessions will be interrupted and the page will reconnect automatically.\nThis is a last resort: if you only need dsh-sql and similar plugins to pick up new values, use the hot-reload allowlist above instead — it does not interrupt sessions.",
+		"global.restarting": "Restarting…",
+		"global.restartFailed": "Restart request failed: {msg}",
+		"global.restartTimeout": "Timed out waiting for the Host to come back; refresh the page manually.",
+		"global.restartRecovered": "The Host is back; refreshing…",
+		"detail.badge": "{n} environment variables allowed",
+		"detail.badgeLoading": "Parameters allowed",
+		"detail.badgeTip": "This plugin is in the parameter allowlist; {n} environment variables are currently allowed.",
+		"detail.badgeTipEmpty": "This plugin is in the parameter allowlist, but no environment variables are configured yet (add them on the dsh-settings-params plugin page).",
+		"detail.title": "Parameters allowed",
+		"detail.reading": "Reading…",
+		"detail.allowedCount": "{n} allowed",
+		"detail.hasValue": "Value set",
+		"detail.noValue": "No value",
+		"detail.desc": "Parameters are defined on the dsh-settings-params plugin page.",
+		"detail.refresh": "Refresh status",
+		"detail.stateFailed": "Failed to read the parameter state.",
+	};
+
+	/**
+	 * 把宿主返回的机器可读码翻译成当前语言的文案。
+	 *
+	 * 只翻**字典里定义过**的 code；未定义的（宿主异常文本等）原样返回，避免把
+	 * 英文异常信息变成 "code.xxx" 这种半成品。
+	 */
+	function codeText(t, code, params) {
+		if (typeof code !== "string" || code === "") return "";
+		var key = "code." + code;
+		// 字典里没有的 code 原样返回（宿主异常文本等）。
+		if (!(key in zh)) return code;
+		// code 与它的占位参数是同一条响应的两个字段，这里合并，
+		// 省得每个调用点都写一遍 `body.params`。
+		return t(key, params);
+	}
+
+	/**
+	 * fiber 状态 → 状态标签文案。
+	 *
+	 * 状态取自宿主 `/list` 的 `targets[].state`；未知状态退化为「不可重载」，
+	 * 与旧实现（`STATE_LABEL[state] || "不可重载"`）行为一致。
+	 */
+	function stateLabel(t, state) {
+		var key = "state." + String(state);
+		return (key in zh) ? t(key) : t("wl.optNotRestartable");
+	}
 
 	/** 前端轮询重启是否完成的探针地址与间隔。 */
 	var HEALTH_URL = ROUTE_BASE + "/list";
@@ -250,11 +538,11 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 			function (res) {
 				return res.json().then(
 					function (body) { return body; },
-					function () { return { ok: false, error: "响应不是合法 JSON（HTTP " + res.status + "）。" }; }
+					function () { return { ok: false, error: "bad-json", params: { status: res.status } }; }
 				);
 			},
 			function (err) {
-				return { ok: false, error: "请求失败：" + (err && err.message ? err.message : String(err)) };
+				return { ok: false, error: "request-failed", params: { msg: err && err.message ? err.message : String(err) } };
 			}
 		);
 	}
@@ -296,6 +584,10 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 	 * @returns {object} React 元素。
 	 */
 	function ParamsSection(props) {
+		// 渲染器按注册项声明的 locale 命名空间自动注入 t（见文件头接线说明），
+		// 组件不需要自己 inject locale 服务。
+		var t = props.t;
+
 		var state = react.useState({ loading: true, file: "", legacyFile: "", variables: [], targets: [], whitelist: [], expose: [], error: "", notice: "" });
 		var snap = state[0];
 		var setSnap = state[1];
@@ -359,8 +651,15 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 		var restartMsg = restartState[0];
 		var setRestartMsg = restartState[1];
 
-		/** 拉取变量列表、可重载目标与白名单。 */
-		function load() {
+		/**
+		 * 拉取变量列表、可重载目标与白名单。
+		 *
+		 * `keepNotice` 供写操作后的自动刷新使用：写操作刚把成功文案写进 notice，
+		 * 若这里无条件重置，React 的自动批处理会让同一轮里的后写覆盖前写，用户就再也
+		 * 看不到「已保存」。用户显式点「刷新」时才清空（默认行为）。
+		 */
+		function load(opts) {
+			var keepNotice = !!(opts && opts.keepNotice);
 			return request("/list").then(function (body) {
 				if (body && body.ok) {
 					var whitelist = Array.isArray(body.whitelist) ? body.whitelist : [];
@@ -368,26 +667,28 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 					// 以服务端白名单为准重建勾选状态：保存后与文件严格一致。
 					whitelist.forEach(function (n) { nextPicked[n] = true; });
 					setPicked(nextPicked);
-					setSnap({
-						loading: false,
-						file: body.file || "",
-						legacyFile: body.legacyFile || "",
-						profileDir: body.profileDir || "",
-						variables: Array.isArray(body.variables) ? body.variables : [],
-						targets: Array.isArray(body.targets) ? body.targets : [],
-						whitelist: whitelist,
-						// 「允许模型读取」授权名单，同样以服务端为准。
-						expose: Array.isArray(body.expose) ? body.expose : [],
-						error: "",
-						notice: body.migrated
-							? "已把旧的 params.env 迁移为 params.yml，旧文件保留为 .bak 备份。"
-							: ""
+					setSnap(function (prev) {
+						return Object.assign({}, prev, {
+							loading: false,
+							file: body.file || "",
+							legacyFile: body.legacyFile || "",
+							profileDir: body.profileDir || "",
+							variables: Array.isArray(body.variables) ? body.variables : [],
+							targets: Array.isArray(body.targets) ? body.targets : [],
+							whitelist: whitelist,
+							// 「允许模型读取」授权名单，同样以服务端为准。
+							expose: Array.isArray(body.expose) ? body.expose : [],
+							error: "",
+							// 迁移提示是**新事实**，必须覆盖；普通刷新清空旧提示；
+							// 写操作后的刷新保留刚写入的成功文案。
+							notice: body.migrated ? t("page.migrated") : (keepNotice ? prev.notice : "")
+						});
 					});
 				} else {
 					setSnap(function (prev) {
 						var next = Object.assign({}, prev);
 						next.loading = false;
-						next.error = (body && body.error) || "读取失败。";
+						next.error = codeText(t, body && body.error, body.params) || t("page.loadFailed");
 						return next;
 					});
 				}
@@ -403,11 +704,14 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 			return promise.then(function (body) {
 				setBusy(false);
 				if (body && body.ok) {
-					setSnap(function (prev) { return Object.assign({}, prev, { notice: okMessage || (body.note || "已保存。") }); });
-					return load();
+					// 成功文案优先用调用方给的整句（已按当前语言翻译）；否则翻宿主回的结果码。
+					setSnap(function (prev) {
+						return Object.assign({}, prev, { notice: okMessage || codeText(t, body.code, body.params) || t("page.saved") });
+					});
+					return load({ keepNotice: true });
 				}
 				setSnap(function (prev) {
-					return Object.assign({}, prev, { error: (body && body.error) || "操作失败。" });
+					return Object.assign({}, prev, { error: codeText(t, body && body.error, body.params) || t("page.actionFailed") });
 				});
 			});
 		}
@@ -415,24 +719,24 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 		/** 提交新增变量。 */
 		function submitNew() {
 			if (draft.key.trim() === "") {
-				setSnap(function (prev) { return Object.assign({}, prev, { error: "请填写变量名。", notice: "" }); });
+				setSnap(function (prev) { return Object.assign({}, prev, { error: t("add.keyRequired"), notice: "" }); });
 				return;
 			}
-			return act(post("/set", { key: draft.key.trim(), value: draft.value, note: draft.note }), "已保存变量 " + draft.key.trim() + "。")
+			return act(post("/set", { key: draft.key.trim(), value: draft.value, note: draft.note }), t("var.saved", { key: draft.key.trim() }))
 				.then(function () { setDraft({ key: "", value: "", note: "" }); });
 		}
 
 		/** 提交行内修改。 */
 		function submitEdit() {
 			var key = edit.key;
-			return act(post("/set", { key: key, value: edit.value, note: edit.note }), "已更新变量 " + key + "。")
+			return act(post("/set", { key: key, value: edit.value, note: edit.note }), t("var.updated", { key: key }))
 				.then(function () { setEdit({ key: "", value: "", note: "" }); });
 		}
 
 		/** 删除变量（带二次确认：删除会导致依赖它的插件失效）。 */
 		function removeKey(key) {
-			if (!window.confirm("确定删除环境变量 " + key + " 吗？\\n依赖它的插件在重启后将不再收到该变量。")) return;
-			return act(post("/unset", { key: key }), "已删除变量 " + key + "。");
+			if (!window.confirm(t("var.deleteConfirm", { key: key }))) return;
+			return act(post("/unset", { key: key }), t("var.deleted", { key: key }));
 		}
 
 		/**
@@ -446,14 +750,14 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 			return act(
 				post("/expose", { name: key, exposed: exposed }),
 				exposed
-					? "已允许模型读取 " + key + " 的明文（会进入模型上下文与会话记录）。"
-					: "已禁止模型读取 " + key + "，该授权立即失效。"
+					? t("var.exposeOn", { key: key })
+					: t("var.exposeOff", { key: key })
 			);
 		}
 
 		/** 从文件重新载入（针对手工编辑文件的场景），不重载插件。 */
 		function reload() {
-			return act(post("/reload", { withReload: false }), "已按文件内容重新注入当前进程。");
+			return act(post("/reload", { withReload: false }), t("code.reload-env-only"));
 		}
 
 		/** 切换某个插件是否在白名单内。 */
@@ -478,10 +782,10 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 		 * 也能命中 `@deepseek-ai/dsh-tool-cordis` —— 包名长短不一时更好用。
 		 * @returns 过滤后的目标数组。
 		 */
-		function matches(t) {
+		function matches(target) {
 			var q = query.trim().toLowerCase();
 			if (q === "") return true;
-			return t.name.toLowerCase().indexOf(q) >= 0;
+			return target.name.toLowerCase().indexOf(q) >= 0;
 		}
 
 		/** 用户自己装的插件（默认展开）。 */
@@ -498,29 +802,30 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 		 * 渲染一行候选项。
 		 * @param t - 目标描述。
 		 */
-		function optionRow(t) {
-			var on = !!picked[t.name];
-			var clickable = t.restartable && !busy;
+		function optionRow(target) {
+			// ⚠️ 参数名不能叫 `t`：外层的 `t` 是翻译函数，同名会被遮蔽。
+			var on = !!picked[target.name];
+			var clickable = target.restartable && !busy;
 			// 同名条目：loader 里可能存在多个同名 fiber。宿主已按「运行中优先」
 			// 选中代表条目，这里如实标注，免得用户以为重载的是另一个实例。
-			var dupTip = t.ambiguous
-				? "；该名字在 loader 里有 " + (t.duplicateCount || 2) + " 个条目，实际重载运行中的那个"
+			var dupTip = target.ambiguous
+				? t("wl.optDupTip", { n: target.duplicateCount || 2 })
 				: "";
 			return react.createElement("div", {
 				className: "sp-opt" + (clickable ? "" : " sp-off"),
-				key: t.name,
-				title: (clickable ? "点击加入白名单" : (STATE_LABEL[t.state] || "不可重载")) + dupTip,
-				onClick: clickable ? function () { toggleTarget(t.name); } : undefined
+				key: target.name,
+				title: (clickable ? t("wl.optAdd") : stateLabel(t, target.state)) + dupTip,
+				onClick: clickable ? function () { toggleTarget(target.name); } : undefined
 			},
-				react.createElement("span", { className: "sp-opt-name" }, t.name),
-				t.ambiguous
-					? react.createElement(Tag, { tone: "warning" }, "同名 " + (t.duplicateCount || 2))
+				react.createElement("span", { className: "sp-opt-name" }, target.name),
+				target.ambiguous
+					? react.createElement(Tag, { tone: "warning" }, t("wl.dupTag", { n: target.duplicateCount || 2 }))
 					: null,
-				t.restartable
+				target.restartable
 					? (on
-						? react.createElement(Tag, { tone: "info" }, "已选")
-						: react.createElement(Tag, { tone: "outline" }, "可重载"))
-					: react.createElement(Tag, { tone: "outline" }, STATE_LABEL[t.state] || "不可重载")
+						? react.createElement(Tag, { tone: "info" }, t("wl.optSelected"))
+						: react.createElement(Tag, { tone: "outline" }, t("wl.optRestartable")))
+					: react.createElement(Tag, { tone: "outline" }, stateLabel(t, target.state))
 			);
 		}
 
@@ -540,7 +845,7 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 
 			if (userHits.length > 0) {
 				nodes.push(react.createElement("div", { className: "sp-opt-group", key: "__ug" },
-					"用户安装的插件（" + userHits.length + "）"));
+					t("wl.groupUser", { n: userHits.length })));
 				nodes = nodes.concat(userHits.slice(0, LIMIT).map(optionRow));
 			}
 
@@ -548,23 +853,23 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 			var showSys = searching || showSystem;
 			if (sysHits.length > 0 && showSys) {
 				nodes.push(react.createElement("div", { className: "sp-opt-group", key: "__sg" },
-					"宿主内置（" + sysHits.length + "）"));
+					t("wl.groupSystem", { n: sysHits.length })));
 				nodes = nodes.concat(sysHits.slice(0, LIMIT).map(optionRow));
 			} else if (sysHits.length > 0) {
 				nodes.push(react.createElement("div", {
 					className: "sp-opt", key: "__toggle",
 					onClick: function () { setShowSystem(true); }
 				}, react.createElement("span", { className: "sp-opt-name" },
-					"▸ 显示 " + sysHits.length + " 个宿主内置插件")));
+					t("wl.showSystem", { n: sysHits.length }))));
 			}
 
 			if (userHits.length === 0 && sysHits.length === 0) {
 				nodes.push(react.createElement("div", { className: "sp-empty", key: "__none" },
-					"没有匹配的插件。"));
+					t("wl.noMatch")));
 			}
 			if (nodes.length > LIMIT) {
 				nodes.push(react.createElement("div", { className: "sp-opt-group", key: "__more" },
-					"结果较多，请继续输入以缩小范围。"));
+					t("wl.more")));
 			}
 			return nodes;
 		}
@@ -578,8 +883,7 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 		function applyWhitelist() {
 			var names = pickedNames();
 			if (names.length > 0) {
-				var ok = window.confirm("将热重载以下插件：\\n\\n  " + names.join("\\n  ") +
-					"\\n\\n这些插件会被卸载并立即重新加载，其连接/状态会重建。继续吗？");
+				var ok = window.confirm(t("wl.applyConfirm", { names: names.join("\n  ") }));
 				if (!ok) return;
 			}
 			setBusy(true);
@@ -592,17 +896,19 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 					var skipped = Array.isArray(body.skipped) ? body.skipped : [];
 					// 未能重载的条目已被宿主从白名单剔除，这里明确告诉用户原因，
 					// 否则勾了却"没选上"会让人困惑。
-					var notice = body.message || "已应用。";
+					var notice = codeText(t, body.code, body.params) || t("page.saved");
 					if (skipped.length > 0) {
-						notice += "\n未通过：" + skipped.map(function (s) {
-							return s.name + "（" + (s.error || "失败") + "）";
-						}).join("；");
+						notice += "\n" + t("wl.skipped", {
+							list: skipped.map(function (s) {
+								return t("wl.skippedItem", { name: s.name, reason: codeText(t, s.error, s) || t("page.actionFailed") });
+							}).join(t("wl.listSep"))
+						});
 					}
 					setSnap(function (prev) { return Object.assign({}, prev, { notice: notice }); });
-					return load();
+					return load({ keepNotice: true });
 				}
 				setSnap(function (prev) {
-					return Object.assign({}, prev, { error: (body && body.error) || "操作失败。" });
+					return Object.assign({}, prev, { error: codeText(t, body && body.error, body.params) || t("page.actionFailed") });
 				});
 			});
 		}
@@ -614,25 +920,25 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 		 * 这里先确认，再发起重启，然后轮询探针直到服务回来。
 		 */
 		function restart() {
-			if (!window.confirm("重启 DSH 服务？\\n\\n会中断当前所有进行中的会话，页面将自动重连。\\n这是兜底手段：若只需让 dsh-sql 等插件读到新值，请改用上方的「热重载白名单」，那不会中断会话。")) return;
-			setRestartMsg("正在重启…");
+			if (!window.confirm(t("global.restartConfirm"))) return;
+			setRestartMsg(t("global.restarting"));
 			post("/restart", {}).then(function (body) {
 				if (!body || !body.ok) {
-					setRestartMsg("重启请求失败：" + ((body && body.error) || "未知错误"));
+					setRestartMsg(t("global.restartFailed", { msg: codeText(t, body && body.error, body.params) || t("unknown") }));
 					return;
 				}
 				var startedAt = Date.now();
 				var timer = setInterval(function () {
 					if (Date.now() - startedAt > POLL_TIMEOUT_MS) {
 						clearInterval(timer);
-						setRestartMsg("等待服务恢复超时，请手动刷新页面。");
+						setRestartMsg(t("global.restartTimeout"));
 						return;
 					}
 					fetch(HEALTH_URL, { cache: "no-store" }).then(
 						function (res) {
 							if (!res.ok) return;
 							clearInterval(timer);
-							setRestartMsg("服务已恢复，正在刷新…");
+							setRestartMsg(t("global.restartRecovered"));
 							window.location.reload();
 						},
 						function () { /* 宿主已下线，继续轮询 */ }
@@ -662,16 +968,16 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 			// 故这里一定用一个 <label> 包住「勾选框 + 文字」，风险标记作为同级兄弟节点。
 			var exposeToggle = react.createElement("label", { className: "sp-expose-hit" },
 				exposeBox,
-				react.createElement("span", null, "允许模型读取")
+				react.createElement("span", null, t("expose.label"))
 			);
 			var exposeCell = item.source === "file"
 				? react.createElement("span", {
 					className: "sp-expose" + (busy ? " sp-disabled" : ""),
-					title: Tooltip === null ? EXPOSE_RISK_TIP : undefined
+					title: Tooltip === null ? t("expose.riskTip") : undefined
 				},
 					Tooltip !== null
 						? react.createElement(Tooltip, {
-							label: EXPOSE_RISK_TIP,
+							label: t("expose.riskTip"),
 							side: "bottom",
 							delayMs: 300,
 							maxWidth: 380
@@ -680,7 +986,7 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 					// 勾选后才显示风险短标记：未勾选时该行不多占任何宽度，
 					// 勾选时立刻在视线内给出「有代价」的信号，详情仍在 Tooltip 里。
 					exposed
-						? react.createElement("span", { className: "sp-expose-warn" }, EXPOSE_RISK_SHORT)
+						? react.createElement("span", { className: "sp-expose-warn" }, t("expose.riskShort"))
 						: null
 				)
 				: null;
@@ -708,7 +1014,7 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 				react.createElement("div", { className: "sp-row-main" },
 				keyCell,
 				item.source === "host"
-					? react.createElement(Tag, { tone: "warning" }, "进程内")
+					? react.createElement(Tag, { tone: "warning" }, t("var.inProcess"))
 					: null,
 				editing
 					? react.createElement(react.Fragment, null,
@@ -717,7 +1023,7 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 							type: "text",
 							value: edit.value,
 							autoFocus: true,
-							placeholder: "新值",
+							placeholder: t("var.newValue"),
 							onChange: function (e) { setEdit({ key: item.key, value: e.target.value, note: edit.note }); },
 							onKeyDown: function (e) {
 								if (e.key === "Enter") submitEdit();
@@ -728,7 +1034,7 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 							className: "sp-input",
 							type: "text",
 							value: edit.note,
-							placeholder: "备注",
+							placeholder: t("var.notePlaceholder"),
 							maxLength: 200,
 							onChange: function (e) { setEdit({ key: item.key, value: edit.value, note: e.target.value }); },
 							onKeyDown: function (e) {
@@ -738,22 +1044,22 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 						})
 					)
 					: react.createElement("span", { className: "sp-mask" },
-						item.hasValue ? "••••••" + (item.length ? " (" + item.length + " 字符)" : "") : "（空值）"),
+						item.hasValue ? (item.length ? t("var.maskedLength", { n: item.length }) : t("var.masked")) : t("var.emptyValue")),
 				react.createElement("span", { className: "sp-actions" },
 					editing
 						? react.createElement(react.Fragment, null,
-							react.createElement(Btn, { size: "sm", variant: "primary", disabled: busy, onClick: submitEdit }, "保存"),
-							react.createElement(Btn, { size: "sm", variant: "ghost", onClick: function () { setEdit({ key: "", value: "", note: "" }); } }, "取消")
+							react.createElement(Btn, { size: "sm", variant: "primary", disabled: busy, onClick: submitEdit }, t("save")),
+							react.createElement(Btn, { size: "sm", variant: "ghost", onClick: function () { setEdit({ key: "", value: "", note: "" }); } }, t("cancel"))
 						)
 						: react.createElement(react.Fragment, null,
 							react.createElement(Btn, {
 								size: "sm", variant: "outline",
 								onClick: function () { setEdit({ key: item.key, value: "", note: item.note || "" }); }
-							}, item.note ? "修改" : "改值/备注"),
+							}, item.note ? t("var.edit") : t("var.editValueNote")),
 							react.createElement(Btn, {
 								size: "sm", variant: "danger", disabled: busy,
 								onClick: function () { removeKey(item.key); }
-							}, "删除")
+							}, t("var.delete"))
 						)
 				)
 				),
@@ -763,40 +1069,40 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 
 		return react.createElement("div", { className: "sp-root" },
 			react.createElement("p", { className: "sp-lead" },
-				"管理注入 DSH 宿主的环境变量，保存后写入当前进程并持久化。"),
+				t("page.lead")),
 			snap.file ? react.createElement("p", { className: "sp-file" }, snap.file) : null,
 			snap.legacyFile
-				? react.createElement("p", { className: "sp-file" }, "旧文件（已保留为 .bak）：" + snap.legacyFile)
+				? react.createElement("p", { className: "sp-file" }, t("page.legacyFile", { file: snap.legacyFile }))
 				: null,
 
 			snap.error ? react.createElement("p", { className: "sp-err" }, snap.error) : null,
 			snap.notice ? react.createElement("p", { className: "sp-ok" }, snap.notice) : null,
 
 			react.createElement("div", { className: "sp-card" },
-				react.createElement("h3", { className: "sp-card-title" }, "已配置变量"),
+				react.createElement("h3", { className: "sp-card-title" }, t("var.title")),
 				snap.loading
-					? react.createElement("div", { className: "sp-empty" }, "加载中…")
+					? react.createElement("div", { className: "sp-empty" }, t("loading"))
 					: (rows.length === 0
-						? react.createElement("div", { className: "sp-empty" }, "还没有配置任何环境变量。")
+						? react.createElement("div", { className: "sp-empty" }, t("var.empty"))
 						: rows),
 				react.createElement("p", { className: "sp-note" },
-					"值为掩码显示；「进程内」表示仅存在于当前进程，点「修改」可纳入文件。")
+					t("var.note"))
 			),
 
 			react.createElement("div", { className: "sp-card" },
-				react.createElement("h3", { className: "sp-card-title" }, "新增 / 更新变量"),
+				react.createElement("h3", { className: "sp-card-title" }, t("add.title")),
 				react.createElement("div", { className: "sp-form" },
 					react.createElement("input", {
 						className: "sp-input sp-input-mono",
 						type: "text",
-						placeholder: "变量名，如 DINGTALK_REGISTRATION_SOURCE",
+						placeholder: t("add.keyPlaceholder"),
 						value: draft.key,
 						onChange: function (e) { setDraft({ key: e.target.value, value: draft.value, note: draft.note }); }
 					}),
 					react.createElement("input", {
 						className: "sp-input",
 						type: "password",
-						placeholder: "值（敏感内容不会回显）",
+						placeholder: t("add.valuePlaceholder"),
 						value: draft.value,
 						onChange: function (e) { setDraft({ key: draft.key, value: e.target.value, note: draft.note }); },
 						onKeyDown: function (e) { if (e.key === "Enter") submitNew(); }
@@ -804,32 +1110,31 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 					react.createElement("input", {
 						className: "sp-input",
 						type: "text",
-						placeholder: "备注（可选），如：生产库密码",
+						placeholder: t("add.notePlaceholder"),
 						maxLength: 200,
 						value: draft.note,
 						onChange: function (e) { setDraft({ key: draft.key, value: draft.value, note: e.target.value }); },
 						onKeyDown: function (e) { if (e.key === "Enter") submitNew(); }
 					}),
-					react.createElement(Btn, { variant: "primary", disabled: busy, onClick: submitNew }, "保存")
+					react.createElement(Btn, { variant: "primary", disabled: busy, onClick: submitNew }, t("save"))
 				)
 			),
 
 			react.createElement("div", { className: "sp-card" },
-				react.createElement("h3", { className: "sp-card-title" }, "热重载白名单"),
+				react.createElement("h3", { className: "sp-card-title" }, t("wl.title")),
 				react.createElement("p", { className: "sp-note" },
-					"选中那些只在启动时读一次环境变量的插件（如 dsh-sql），" +
-					"点下方按钮即可让其重读新值，无需重启服务。"),
+					t("wl.note")),
 
 				// 已选芯片：先看选了什么，再看怎么加。
 				react.createElement("div", { className: "sp-chips" },
 					pickedNames().length === 0
-						? react.createElement("span", { className: "sp-empty", style: { padding: 0 } }, "未选择任何插件。")
+						? react.createElement("span", { className: "sp-empty", style: { padding: 0 } }, t("wl.none"))
 						: pickedNames().map(function (n) {
 							return react.createElement("span", { className: "sp-chip", key: n },
 								react.createElement("span", { className: "sp-chip-text", title: n }, n),
 								react.createElement("button", {
 									type: "button", className: "sp-chip-x", disabled: busy,
-									title: "移出白名单",
+									title: t("wl.remove"),
 									onClick: function () { toggleTarget(n); }
 								}, "×")
 							);
@@ -838,12 +1143,12 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 
 				// 可搜索下拉：168 条候选不可能平铺，改为输入过滤 + 分组展示。
 				snap.loading
-					? react.createElement("div", { className: "sp-empty" }, "加载中…")
+					? react.createElement("div", { className: "sp-empty" }, t("loading"))
 					: react.createElement("div", { className: "sp-picker", ref: pickerRef },
 						react.createElement("input", {
 							className: "sp-input sp-input-mono",
 							type: "text",
-							placeholder: "搜索插件名，如 dsh-sql",
+							placeholder: t("wl.searchPlaceholder"),
 							value: query,
 							onFocus: function () { setOpen(true); },
 							onChange: function (e) { setQuery(e.target.value); setOpen(true); },
@@ -852,7 +1157,7 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 						// 展开时提供显式关闭按钮：即使点击检测失效，用户也总有退路。
 						open
 							? react.createElement("button", {
-								type: "button", className: "sp-picker-x", title: "收起列表",
+								type: "button", className: "sp-picker-x", title: t("wl.collapse"),
 								onClick: function () { setOpen(false); }
 							}, "×")
 							: null,
@@ -863,11 +1168,13 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 
 				results && results.length > 0
 					? react.createElement("div", null,
-						react.createElement("p", { className: "sp-note" }, "上次热重载结果："),
+						react.createElement("p", { className: "sp-note" }, t("wl.resultsTitle")),
 						results.map(function (r) {
 							return react.createElement("div", { className: "sp-result", key: r.name },
 								react.createElement("span", { className: r.ok ? "sp-result-ok" : "sp-result-err" },
-									(r.ok ? "✓ " : "✗ ") + r.name + (r.ok ? " 已重载" : "：" + (r.error || "失败"))));
+									(r.ok
+										? t(r.note ? "wl.resultOkDup" : "wl.resultOk", { name: r.name, count: r.noteCount || 2, id: r.noteId || r.name })
+										: t("wl.resultErr", { name: r.name, error: codeText(t, r.error, r.params) || t("page.actionFailed") }))));
 						}))
 					: null,
 				// 卡片内**只放一个按钮**：保存并热重载。
@@ -882,8 +1189,8 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 				react.createElement("div", { className: "sp-footer" },
 					react.createElement(Btn, { variant: "primary", disabled: busy, onClick: applyWhitelist },
 						pickedNames().length > 0
-							? "保存并热重载 " + pickedNames().length + " 个插件"
-							: "保存白名单（不重载）")
+							? t("wl.applyWith", { n: pickedNames().length })
+							: t("wl.applyOnly"))
 				)
 			),
 
@@ -893,15 +1200,15 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 			// 用户误以为它们只影响刚刚编辑的那一张卡片。
 			react.createElement("div", { className: "sp-global" },
 				react.createElement("div", { className: "sp-global-head" },
-					react.createElement("h3", { className: "sp-card-title" }, "全局操作"),
+					react.createElement("h3", { className: "sp-card-title" }, t("global.title")),
 					react.createElement("span", { className: "sp-global-hint" },
-						"作用于整份参数文件与宿主进程，不只是上方某一项设置。")),
+						t("global.hint"))),
 				react.createElement("div", { className: "sp-footer" },
-					react.createElement(Btn, { variant: "outline", disabled: busy, onClick: reload }, "重新加载文件"),
-					react.createElement(Btn, { variant: "ghost", disabled: busy, onClick: load }, "刷新"),
+					react.createElement(Btn, { variant: "outline", disabled: busy, onClick: reload }, t("global.reload")),
+					react.createElement(Btn, { variant: "ghost", disabled: busy, onClick: load }, t("global.refresh")),
 					react.createElement("span", { className: "sp-spacer" }),
 					// 危险操作排在最右，与上面两个拉开距离，降低误点概率。
-					react.createElement(Btn, { variant: "danger", disabled: busy, onClick: restart }, "重启服务")
+					react.createElement(Btn, { variant: "danger", disabled: busy, onClick: restart }, t("global.restart"))
 				)
 			),
 
@@ -971,7 +1278,7 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 	 * @param {number} tick - 自增可触发重新拉取（区块的「刷新状态」）。
 	 * @returns {object} `{ loading, error, allowed, variableCount }`。
 	 */
-	function useReleaseState(subject, tick) {
+	function useReleaseState(subject, tick, t) {
 		var pkgName = detailPackageName(subject);
 		var state = react.useState({ loading: true, error: "", allowed: false, variableCount: 0, names: [] });
 		var snap = state[0];
@@ -989,7 +1296,7 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 				if (!body || !body.ok) {
 					setSnap({
 						loading: false,
-						error: (body && body.error) || "读取参数状态失败。",
+						error: codeText(t, body && body.error, body.params) || t("detail.stateFailed"),
 						allowed: false,
 						variableCount: 0,
 						names: []
@@ -1048,17 +1355,18 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 	 * @returns {object|null} React 元素或 null。
 	 */
 	function EnvKeyBadge(props) {
-		var view = useReleaseState(props.subject, 0);
+		var t = props.t;
+		var view = useReleaseState(props.subject, 0, t);
 		if (view === null || !view.allowed) return null;
 		if (view.loading) {
-			return react.createElement("span", { className: "sp-tag sp-tag-outline" }, "参数放行");
+			return react.createElement("span", { className: "sp-tag sp-tag-outline" }, props.t("detail.badgeLoading"));
 		}
 		return react.createElement("span", {
 			className: "sp-tag " + (view.variableCount > 0 ? "sp-tag-ok" : "sp-tag-warning"),
 			title: view.variableCount > 0
-				? "本插件已在参数放行名单中，当前共放行 " + view.variableCount + " 个环境变量。"
-				: "本插件已在参数放行名单中，但尚未配置任何环境变量（可在 dsh-settings-params 的插件页里添加）。"
-		}, "已放行 " + view.variableCount + " 个环境变量");
+				? t("detail.badgeTip", { n: view.variableCount })
+				: t("detail.badgeTipEmpty")
+		}, t("detail.badge", { n: view.variableCount }));
 	}
 
 	/**
@@ -1071,11 +1379,12 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 	 * @returns {object|null} React 元素或 null。
 	 */
 	function EnvKeySection(props) {
+		var t = props.t;
 		// 触发重新拉取（区块里的「刷新状态」按钮）。
 		var tickState = react.useState(0);
 		var tick = tickState[0];
 		var setTick = tickState[1];
-		var view = useReleaseState(props.subject, tick);
+		var view = useReleaseState(props.subject, tick, props.t);
 
 		if (view === null || !view.allowed) return null;
 
@@ -1086,13 +1395,13 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 		// 与页面其它提示保持同一套气泡）。
 		var refreshIcon = IconRefresh !== null
 			? react.createElement(IconRefresh, { size: 16 })
-			: react.createElement("span", { className: "sp-rel-refresh-text" }, "刷新");
+			: react.createElement("span", { className: "sp-rel-refresh-text" }, t("global.refresh"));
 		var refreshBtn = react.createElement("button", {
 			type: "button",
 			className: "sp-rel-refresh",
 			disabled: view.loading,
-			"aria-label": "刷新状态",
-			title: Tooltip === null ? "刷新状态" : undefined,
+			"aria-label": t("detail.refresh"),
+			title: Tooltip === null ? t("detail.refresh") : undefined,
 			onClick: function () { setTick(tick + 1); }
 		}, refreshIcon);
 		return react.createElement("section", { className: "sp-env-section" }, [
@@ -1101,13 +1410,13 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 			// 这里再说一遍纯属噪音（用户明确要求删掉）。
 			// 刷新图标靠 .sp-env-head 的 margin-left:auto 推到最右。
 			react.createElement("div", { className: "sp-env-head", key: "head" }, [
-				react.createElement("h3", { className: "sp-card-title", key: "t" }, "参数放行"),
+				react.createElement("h3", { className: "sp-card-title", key: "t" }, t("detail.title")),
 				react.createElement("span", {
 					className: "sp-tag " + (count > 0 ? "sp-tag-ok" : "sp-tag-warning"),
 					key: "s"
-				}, view.loading ? "读取中…" : "已放行 " + count + " 个"),
+				}, view.loading ? t("detail.reading") : t("detail.allowedCount", { n: count })),
 				Tooltip !== null
-					? react.createElement(Tooltip, { label: "刷新状态", side: "bottom", delayMs: 300, key: "r" }, refreshBtn)
+					? react.createElement(Tooltip, { label: t("detail.refresh"), side: "bottom", delayMs: 300, key: "r" }, refreshBtn)
 					: react.createElement(react.Fragment, { key: "r" }, refreshBtn)
 			]),
 			// 逐条列出**实际放行了哪些参数** —— 这是本卡片唯一不可替代的内容：
@@ -1124,7 +1433,7 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 							react.createElement("span", {
 								className: "sp-tag " + (item.hasValue ? "sp-tag-ok" : "sp-tag-warning"),
 								key: "s"
-							}, item.hasValue ? "已填值" : "未填值")
+							}, item.hasValue ? t("detail.hasValue") : t("detail.noValue"))
 						]);
 					})
 				)
@@ -1132,7 +1441,7 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 			// 一句话说明来源即可（用户明确要求「一句话就行」，故删掉了原来那段
 			// 「本插件不推断…唯一来源…」的长解释 —— 那段对使用者是噪音）。
 			react.createElement("p", { className: "sp-lead", key: "desc" },
-				"参数在 dsh-settings-params 的插件页里定义。")
+				t("detail.desc"))
 			// 刷新已移到卡片右上角（图标按钮），故这里不再有底部按钮。
 			// 也**不再渲染 view.error**：拉取失败时 allowed 必为 false，上面的
 			// `!view.allowed` 守卫已经把整块返回 null，那个分支永远走不到 ——
@@ -1147,6 +1456,33 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 	 */
 	function apply(ctx) {
 		installStyles();
+
+		// ---- 注册中英字典（官方 locale 服务）----
+		//
+		// ⚠️ 运行时的 register **不检查**「两种语言是否都给全」—— 那只是 TS 侧对
+		//    LocaleNamespaceMap 声明命名空间的**编译期**约束，纯 JS bundle 拿不到。
+		//    漏一种语言不会报错，只会在该语言下回落到 common 或直接显示 key 名。
+		//    所以两份字典的键必须由我们自己保证一致（见下面的键一致性自查）。
+		//
+		// 用 ctx.effect 包住：卸载时自动撤销该命名空间，HMR 重载不会撞
+		// 「namespace 已有该 locale」的重复注册错误。
+		//
+		// 这里**没有**绑定 `ctx.locale.bind(NS)`：本插件的文案全部在槽组件里渲染，
+		// 而组件拿到的 `t` 由渲染器按注册项的 `locale` 注入（含语言切换后的刷新），
+		// 自己再 bind 一个反而会拿到不随语言变化的老引用。
+		try {
+			var zhKeys = Object.keys(zh), enKeys = Object.keys(en);
+			var missingEn = zhKeys.filter(function (k) { return !(k in en); });
+			var missingZh = enKeys.filter(function (k) { return !(k in zh); });
+			if (missingEn.length || missingZh.length) {
+				console.warn("[dsh-settings-params] dictionary keys mismatch",
+					{ missingEn: missingEn, missingZh: missingZh });
+			}
+		} catch (e) { /* 自查本身绝不能影响注册 */ }
+
+		ctx.effect(function () {
+			return ctx.locale.register(NS, { zh: zh, en: en });
+		}, NS + ": dictionaries");
 
 		// 参数设置页挂在**本插件自己的 bundle 详情页**上（用户要求，取代原先的
 		// 设置导航分页）。
@@ -1163,10 +1499,13 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 		// props.configure），是现成先例。
 		//
 		// key 必须等于**包名**：owner 按包名分派（renderSlot 的 entryKey = pkg.name）。
+		// `locale: NS` 是渲染器注入 `t` 的开关（`standardKit`）；没有它组件里的
+		// `t` 就是 undefined，页面会直接崩，而不是静默显示中文。
 		ctx.slots.inject("plugins.bundle.config", function () {
 			return ctx.slots.register({
 				name: "plugins.bundle.config",
-				key: name
+				key: name,
+				locale: NS
 			}, ParamsSection);
 		});
 
@@ -1182,14 +1521,16 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 			return ctx.slots.register({
 				name: "plugins.detail.badge",
 				id: "dsh-settings-params-envkeys",
-				order: 100
+				order: 100,
+				locale: NS
 			}, EnvKeyBadge);
 		});
 		ctx.slots.inject("plugins.detail.section", function () {
 			return ctx.slots.register({
 				name: "plugins.detail.section",
 				id: "dsh-settings-params-envkeys",
-				order: 100
+				order: 100,
+				locale: NS
 			}, EnvKeySection);
 		});
 	}

@@ -52,14 +52,19 @@ dsh plugin --profile web add github:felixpu/dsh-settings-params
 文件格式（YAML）：
 
 ```yaml
-expose: []          # 允许模型读取的变量名（默认空 = 都不可读）
-params:
-  - name: DSH_SQL_PASSWORD_OPENCROWD
+variables:
+  DSH_SQL_PASSWORD_OPENCROWD:   # 变量名即键（同名不可能存在）
     value: "******"
     note: 生产库只读账号
-  - name: DEEPSEEK_API_KEY
+  DEEPSEEK_API_KEY:
     value: "sk-..."
     note: ""
+
+expose: []          # 允许模型读取明文的变量名（默认空 = 都不可读）
+
+reload:
+  targets:          # 保存后需要热重载的插件条目名
+    - dsh-sql
 ```
 
 ## 宿主路由
@@ -73,6 +78,19 @@ params:
 | `POST` | `/dsh-settings-params/apply` | 应用变量到 `process.env` |
 | `POST` | `/dsh-settings-params/expose` | 修改可读授权 |
 | `POST` | `/dsh-settings-params/restart` | 重启宿主进程 |
+
+## 语言 / Language
+
+本插件界面支持**中文与英文**，跟随平台语言设置：**设置 → 通用 → 语言**。
+切换后界面文案**立即生效**，无需刷新页面或重装插件。宿主半身只回机器可读的
+结果码（`code` / `error`）与占位参数，界面文案全部由客户端字典渲染 ——
+因此同一个宿主进程可以同时服务中文与英文界面的浏览器。
+
+The UI is available in **Chinese and English**, following the platform language
+setting under **Settings → General → Language**. Switching applies immediately —
+no reload or reinstall needed. The Host half returns only machine-readable result
+codes (`code` / `error`) plus placeholder parameters; every user-facing string is
+rendered from the client dictionary.
 
 ## 展示元数据（locale）
 
