@@ -1498,15 +1498,52 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 		// 成 Host 的 settings 存储。官方 voice-input 就是这种用法（它用自己的
 		// props.configure），是现成先例。
 		//
-		// key 必须等于**包名**：owner 按包名分派（renderSlot 的 entryKey = pkg.name）。
+		// 槽位改用 `plugins.row.config`（**本插件所在一行**的配置页）。
+		//
+		// 官方契约（dsh-cordis-client-runner 的槽位文档原文）：
+		//   `plugins.row.config` = "The configuration of **one row a bundle
+		//   declares**, keyed by `<package name>#<row id>` … the row on the
+		//   bundle's page gains a configure control that opens the entry's page".
+		//
+		// 为什么不用 `plugins.bundle.config`（本插件原先用它，聚合后失效）：
+		//   它的 key 是**所在 bundle 的包名**，官方定义为 "a bundle's **own**
+		//   configuration" —— 一个 bundle 只承载**一份**配置。
+		//   装进聚合包 dsh-suite 后，bundle 变成 dsh-suite；若多个插件都去抢
+		//   'dsh-suite' 这一个 key，平台的 keyed 槽用 `find` 只取第一个，
+		//   结果**只有一个插件的配置能显示**（该冲突已实测复现）。
+		//   行级槽按 `包名#行id` 分派，一插件一格，聚合后仍精确命中。
+		//
+		// ⚠️ 注册两个 key：行 id 由 patch 决定，两种装法不同 ——
+		//   · 独立安装：本仓库 cordis.patch.yml 的 `id: settings-params`
+		//     ⇒ `dsh-settings-params#settings-params`
+		//   · 装进聚合包 dsh-suite：那份 patch 的 `id: dsh-suite-settings-params`
+		//     ⇒ `dsh-suite#dsh-suite-settings-params`
+		//   两个都注册才能在两种装法下都显示配置；改动任一份 patch 的行 id 时
+		//   必须同步改这里。
+		//
 		// `locale: NS` 是渲染器注入 `t` 的开关（`standardKit`）；没有它组件里的
 		// `t` 就是 undefined，页面会直接崩，而不是静默显示中文。
-		ctx.slots.inject("plugins.bundle.config", function () {
-			return ctx.slots.register({
-				name: "plugins.bundle.config",
-				key: name,
-				locale: NS
-			}, ParamsSection);
+		var ROW_CONFIG_KEYS = [
+			name + "#settings-params",
+			"dsh-suite#dsh-suite-settings-params"
+		];
+		ctx.slots.inject("plugins.row.config", function () {
+			var disposers = ROW_CONFIG_KEYS.map(function (rowKey) {
+				return ctx.slots.register({
+					name: "plugins.row.config",
+					key: rowKey,
+					locale: NS
+				}, ParamsSection);
+			});
+			return function () {
+				disposers.forEach(function (dispose) {
+					try {
+						if (typeof dispose === "function") dispose();
+					} catch (err) {
+						/* 卸载期异常不影响插件卸载 */
+					}
+				});
+			};
 		});
 
 		// 插件详情页的两个贡献。
