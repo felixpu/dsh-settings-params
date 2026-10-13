@@ -3,5 +3,5 @@
 # 并提供两个按白名单授权读取变量明文的模型工具。
 # 浏览器半身把「参数设置」页挂到本组合包自己的插件详情页（plugins.bundle.config）。
 - insert:
-    - id: dsh-settings-params
+    - id: settings-params
       name: 'dsh-settings-params'

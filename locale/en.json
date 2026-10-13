@@ -1,5 +1,6 @@
 {
   "meta": {
+    "title": "Parameter settings",
     "description": "Manages the environment variables injected into the Host in one place, and hot-reloads allow-listed plugins that read their environment only at startup (such as dsh-sql) so new values take effect without a restart."
   }
 }
