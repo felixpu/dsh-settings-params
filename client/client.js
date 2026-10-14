@@ -1513,18 +1513,26 @@ window.__ModuleLoader__.load({ id: "dsh-settings-params", factory: (require) => 
 		//   结果**只有一个插件的配置能显示**（该冲突已实测复现）。
 		//   行级槽按 `包名#行id` 分派，一插件一格，聚合后仍精确命中。
 		//
-		// ⚠️ 注册两个 key：行 id 由 patch 决定，两种装法不同 ——
+		// ⚠️ 注册三个 key（**保留旧值**，不是冗余）：
 		//   · 独立安装：本仓库 cordis.patch.yml 的 `id: settings-params`
 		//     ⇒ `dsh-settings-params#settings-params`
-		//   · 装进聚合包 dsh-suite：那份 patch 的 `id: dsh-suite-settings-params`
-		//     ⇒ `dsh-suite#dsh-suite-settings-params`
-		//   两个都注册才能在两种装法下都显示配置；改动任一份 patch 的行 id 时
-		//   必须同步改这里。
+		//   · 装进聚合包 dsh-plugin-suite：那份 patch 的
+		//     `id: dsh-suite-settings-params`
+		//     ⇒ `dsh-plugin-suite#dsh-suite-settings-params`
+		//   · 旧的 `dsh-suite#…`：聚合包最初叫 dsh-suite，后因该 npm 包名被他人
+		//     占用而改名 dsh-plugin-suite；按旧包名安装时这一条仍可用。
+		//
+		// ⚠️ 踩过的坑（务必记住）：平台的 key 是 `聚合包【当前包名】#行id`
+		//   （rowConfigKey(bundle, rowId)，bundle = pkg.name）。
+		//   给聚合包改名时**只改了 pack、漏改了这里**，导致插件标题上的「>」
+		//   入口整片消失，且**没有任何报错**（静默不渲染）。
+		//   ⇒ 以后凡是改聚合包的**包名**或**行 id**，必须同步改这里。
 		//
 		// `locale: NS` 是渲染器注入 `t` 的开关（`standardKit`）；没有它组件里的
 		// `t` 就是 undefined，页面会直接崩，而不是静默显示中文。
 		var ROW_CONFIG_KEYS = [
 			name + "#settings-params",
+			"dsh-plugin-suite#dsh-suite-settings-params",
 			"dsh-suite#dsh-suite-settings-params"
 		];
 		ctx.slots.inject("plugins.row.config", function () {
